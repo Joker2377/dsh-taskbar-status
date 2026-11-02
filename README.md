@@ -29,40 +29,31 @@
 
 ## 安裝
 
-### 需求
+就一個連結。
 
-- Windows 10 或 11
-- DeepSeek Harness Desktop（內附 koffi 3.1.1，不必另外安裝）
-- Node.js `>=22.19`（只有要跑驗證腳本時需要）
-
-### 步驟
-
-1. 取得原始碼：
-
-   ```bash
-   git clone https://github.com/Joker2377/dsh-taskbar-status.git
-   ```
-
-2. 先確認找得到 DSH 視窗：
-
-   ```bash
-   node dsh-taskbar-status/scripts/probe.mjs --detect
-   ```
-
-3. 掛進 `desktop` profile：
+1. 複製倉庫網址：
 
    ```text
-   plugin_manager  install_bundle  target = link:<clone>/dsh-taskbar-status
+   https://github.com/Joker2377/dsh-taskbar-status
    ```
 
-   `<clone>` 換成步驟 1 的目錄。這一步只會在 profile 的 `dependencies` 加一條 `link:`，不會複製檔案。
+2. 在 DSH 側邊欄打開 **Plugins**，把網址貼進安裝欄位，按 **Install**。
+3. 安裝時若列出待核准的建置腳本 `koffi`，核准後重試一次；它的原生檔案本來就隨平台套件附上（`@koromix/koffi-win32-x64`），不跑那支腳本也能載入。
+4. 重新載入 App（重開視窗或重啟），工作列就開始反映狀態。
 
-4. 重新載入 App（重開視窗或重啟），外掛就會生效。
+DSH 會用你貼的連結跑一次 `pnpm add`，把 repo 抓進 profile。不需要先 `git clone`，也不用手動改 profile。
+
+> [!IMPORTANT]
+> 貼倉庫**首頁**網址。`https://github.com/.../tree/main` 這類頁面網址會被拒絕（`a URL must point at a git repository or a tarball`）。
+>
+> 要鎖定某一版，把 commit 接在後面：`https://github.com/Joker2377/dsh-taskbar-status#<commit>`。
 
 > [!TIP]
-> 想先確認工作列真的會變色，再決定要不要裝，可以直接跑 `node scripts/probe.mjs`：它不需要 DSH 外掛系統，只會找到視窗並依序示範灰 → 黃＋閃爍 → 紅 → 清除。
+> 想先確認工作列真的會變色，再決定要不要裝：取得原始碼後跑 `node scripts/probe.mjs`。它不走 DSH 外掛系統，只會找到視窗並依序示範灰 → 黃＋閃爍 → 紅 → 清除。
 
-解除安裝＝移除該 `dependencies` 條目（或 `plugin_manager` 移除 bundle）後重新載入；停用瞬間外掛會清掉進度條並釋放 COM 物件。
+需求：Windows 10/11、DeepSeek Harness Desktop（koffi 也隨 DSH 內附，載入時兩邊都找）、Node.js `>=22.19`（只有跑驗證腳本時需要）。
+
+解除安裝：在 **Plugins** 頁移除這個 bundle 後重新載入。停用瞬間外掛會清掉進度條並釋放 COM 物件。
 
 ## 使用
 
