@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The plugin is Windows-only, but the state machine under test is pure JS.
+    # Running on windows-latest keeps CI on the only platform the code targets.
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # No dependency install: the tests import only node: builtins and lib/,
+      # and koffi is imported lazily so nothing touches the FFI layer.
+      - name: Syntax check
+        run: |
+          node --check lib/index.js
+          node --check lib/win32-taskbar.js
+          node --check scripts/probe.mjs
+          node --check scripts/demo.mjs
+      - name: State machine tests
+        run: npm test

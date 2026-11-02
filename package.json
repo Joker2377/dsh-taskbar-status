@@ -1,0 +1,53 @@
+{
+  "name": "dsh-taskbar-status",
+  "version": "0.4.0",
+  "description": "Windows taskbar indicator for DeepSeek Harness Desktop: indeterminate while a turn runs, amber when an approval or question is waiting, latched red after a failed turn.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./win32-taskbar": "./lib/win32-taskbar.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "windows",
+    "taskbar"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Joker2377/dsh-taskbar-status.git"
+  },
+  "homepage": "https://github.com/Joker2377/dsh-taskbar-status#readme",
+  "bugs": {
+    "url": "https://github.com/Joker2377/dsh-taskbar-status/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19",
+    "dsh": ">=0.1.1-rc.2 <0.3.0"
+  },
+  "dependencies": {
+    "koffi": "3.1.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "scripts": {
+    "probe": "node scripts/probe.mjs",
+    "demo": "node scripts/demo.mjs",
+    "test": "node test/taskbar-state.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
