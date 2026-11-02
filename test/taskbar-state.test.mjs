@@ -6,7 +6,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskbarMonitor, observeSessionEvent, resolveFocusWatch, selectState } from '../lib/index.js';
+import {
+	TaskbarMonitor,
+	observeSessionEvent,
+	resolveFocusWatch,
+	selectFlash,
+	selectState,
+} from '../lib/index.js';
+import { TBPF } from '../lib/win32-taskbar.js';
 
 const silent = { debug() {}, warn() {} };
 
@@ -230,4 +237,242 @@ test('a question does not outlive the last open turn', () => {
 	feed(target, 'turn/end', { turn: 1, reason: { kind: 'aborted' } });
 	assert.equal(target.waitingCount(), 0, 'the turn ended without an answer');
 	target.shutdown();
+});
+
+test('blocked items are identified individually, not by their count', () => {
+	const target = monitor();
+	feed(target, 'approval/asked', { id: 'a1' });
+	feed(target, 'tool/call', { turn: 1, callId: 'q1', name: 'ask_user_question' });
+	assert.deepEqual(target.waitingKeys().sort(), ['approval:a1', 'question:q1']);
+	target.shutdown();
+});
+
+test('a question without a callId is still cleared when its turn ends', () => {
+	const target = monitor();
+	feed(target, 'turn/start', { turn: 1 });
+	feed(target, 'tool/call', { turn: 1, name: 'ask_user_question' });
+	assert.equal(target.waitingCount(), 1, 'an unattributable question still blocks the bar');
+	feed(target, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+	assert.equal(target.waitingCount(), 0);
+	target.shutdown();
+});
+
+test('a tool/result for another call never clears a pending question', () => {
+	const target = monitor();
+	feed(target, 'tool/call', { turn: 1, callId: 'q1', name: 'ask_user_question' });
+	feed(target, 'tool/result', { turn: 1, message: { toolCallId: 'bash-9' } });
+	assert.equal(target.waitingCount(), 1);
+	target.shutdown();
+});
+
+test('session/disposed also drops that session questions', () => {
+	const target = monitor();
+	feed(target, 'tool/call', { turn: 1, callId: 'q1', name: 'ask_user_question' }, 'session-a');
+	feed(target, 'tool/call', { turn: 1, callId: 'q2', name: 'ask_user_question' }, 'session-b');
+	target.forgetSession('session-a');
+	assert.deepEqual([...target.questions.keys()], ['q2']);
+	target.shutdown();
+});
+
+test('resolveFocusWatch always reports a boolean seenBackground', () => {
+	assert.deepEqual(resolveFocusWatch({ focusedPid: 0, windowPid: 100 }), {
+		seenBackground: false,
+		acknowledge: false,
+	});
+});
+
+// --- flash bookkeeping ----------------------------------------------------
+
+test('selectFlash announces a blocking item exactly once', () => {
+	assert.deepEqual(selectFlash({ waitingKeys: [], flashedKeys: new Set() }), {
+		flash: false,
+		flashedKeys: new Set(),
+	});
+
+	const first = selectFlash({ waitingKeys: ['approval:a1'], flashedKeys: new Set() });
+	assert.equal(first.flash, true);
+	assert.deepEqual(first.flashedKeys, new Set(['approval:a1']));
+
+	// A re-render of the same blocked item (or a burst of events) is not news.
+	assert.equal(selectFlash({ waitingKeys: ['approval:a1'], flashedKeys: first.flashedKeys }).flash, false);
+
+	// A second item arriving while the first is still pending *is* news.
+	const second = selectFlash({ waitingKeys: ['approval:a1', 'question:q1'], flashedKeys: first.flashedKeys });
+	assert.equal(second.flash, true);
+	assert.deepEqual(second.flashedKeys, new Set(['approval:a1', 'question:q1']));
+
+	// Losing one item must not re-announce the survivor.
+	assert.equal(selectFlash({ waitingKeys: ['question:q1'], flashedKeys: second.flashedKeys }).flash, false);
+
+	// Once nothing is blocked the set is empty, so a later ask flashes again.
+	const cleared = selectFlash({ waitingKeys: [], flashedKeys: second.flashedKeys });
+	assert.equal(cleared.flash, false);
+	assert.equal(cleared.flashedKeys.size, 0);
+	assert.equal(selectFlash({ waitingKeys: ['question:q1'], flashedKeys: cleared.flashedKeys }).flash, true);
+});
+
+// --- rendering ------------------------------------------------------------
+
+/**
+ * A `TaskbarList3` stand-in that records what the monitor asks the shell to do,
+ * plus the minimum Win32 surface `render()` touches. This is the seam that lets
+ * the rendering rules be tested without a window.
+ * @param {{failOnState?: number}} [options]
+ */
+function attachFakeWin32(target, options = {}) {
+	const calls = [];
+	/** @type {any} */
+	const fake = {
+		calls,
+		flashes: 0,
+		setProgressValue(hwnd, completed, total) {
+			calls.push(['value', completed, total]);
+			return 0;
+		},
+		setProgressState(hwnd, state) {
+			if (options.failOnState === state) return 0x80004005;
+			calls.push(['state', state]);
+			return 0;
+		},
+		dispose() {
+			calls.push(['dispose']);
+		},
+	};
+	target.taskbar = fake;
+	target.hwnd = 'hwnd-1';
+	target.api = {
+		IsWindow: () => true,
+		types: { FLASHWINFO: 32 },
+		FlashWindowEx: () => {
+			fake.flashes += 1;
+			return true;
+		},
+	};
+	target.koffi = { sizeof: () => 32 };
+	return fake;
+}
+
+test('a failure fills the bar before switching it red', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'turn/start', { turn: 1 });
+	feed(target, 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'UNKNOWN' } } });
+	target.render();
+	// TBPF_ERROR only colours the filled part; the value must land first.
+	assert.deepEqual(fake.calls, [
+		['value', 100, 100],
+		['state', TBPF.ERROR],
+	]);
+	target.shutdown();
+});
+
+test('a pending approval fills the bar, turns it amber and flashes once', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'approval/asked', { id: 'a1', toolName: 'bash' });
+	target.render();
+	assert.deepEqual(fake.calls, [
+		['value', 100, 100],
+		['state', TBPF.PAUSED],
+	]);
+	assert.equal(fake.flashes, 1);
+	target.shutdown();
+});
+
+test('a second blocked item flashes even while the bar is already amber', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'approval/asked', { id: 'a1' });
+	target.render();
+	feed(target, 'approval/asked', { id: 'a2' });
+	target.render();
+	assert.equal(fake.flashes, 2, 'each newly blocked item gets its own flash');
+	target.render();
+	assert.equal(fake.flashes, 2, 'a re-render of the same items is not news');
+	target.shutdown();
+});
+
+test('an answered question re-arms the flash for the next one', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'tool/call', { turn: 1, callId: 'q1', name: 'ask_user_question' });
+	target.render();
+	assert.equal(fake.flashes, 1);
+
+	feed(target, 'tool/result', { turn: 1, message: { toolCallId: 'q1' } });
+	target.render();
+	assert.equal(fake.flashes, 1);
+
+	feed(target, 'tool/call', { turn: 1, callId: 'q2', name: 'ask_user_question' });
+	target.render();
+	assert.equal(fake.flashes, 2);
+	target.shutdown();
+});
+
+test('running and idle map to the shell flags the plugin documents', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'turn/start', { turn: 1 });
+	target.render();
+	feed(target, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+	target.render();
+	assert.deepEqual(fake.calls, [
+		['state', TBPF.INDETERMINATE],
+		['state', TBPF.NOPROGRESS],
+	]);
+	target.shutdown();
+});
+
+test('an unchanged state is not pushed to the shell twice', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'turn/start', { turn: 1 });
+	target.render();
+	const afterFirst = fake.calls.length;
+	target.render();
+	target.render();
+	assert.equal(fake.calls.length, afterFirst);
+	target.shutdown();
+});
+
+test('a rejected SetProgressState releases the shell object for the next render', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target, { failOnState: TBPF.ERROR });
+	feed(target, 'turn/start', { turn: 1 });
+	feed(target, 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'UNKNOWN' } } });
+	target.render();
+	assert.equal(target.taskbar, null, 'a broken object must be dropped, not reused');
+	assert.deepEqual(fake.calls, [['value', 100, 100], ['dispose']]);
+
+	attachFakeWin32(target);
+	target.render();
+	assert.notEqual(target.taskbar, null);
+	assert.equal(target.applied?.state, 'error', 'the next render rebuilds and repaints');
+	target.shutdown();
+});
+
+test('a missing window is a no-op rather than an exception', () => {
+	const target = monitor();
+	attachFakeWin32(target);
+	target.hwnd = null;
+	target.api = {
+		IsWindow: () => false,
+		EnumWindows: () => {
+			throw new Error('no window');
+		},
+	};
+	assert.doesNotThrow(() => target.render());
+	target.shutdown();
+});
+
+test('shutdown stops further rendering', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'turn/start', { turn: 1 });
+	target.shutdown();
+	const afterShutdown = fake.calls.length;
+	feed(target, 'turn/start', { turn: 2 });
+	target.render();
+	assert.equal(target.disabled, true);
+	assert.equal(fake.calls.length, afterShutdown, 'a disposed monitor must not paint the bar');
 });

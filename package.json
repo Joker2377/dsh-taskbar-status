@@ -1,6 +1,6 @@
 {
   "name": "dsh-taskbar-status",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Windows taskbar indicator for DeepSeek Harness Desktop: indeterminate while a turn runs, amber when an approval or question is waiting, latched red after a failed turn.",
   "type": "module",
   "main": "lib/index.js",
