@@ -85,21 +85,22 @@ DSH 會用你貼的連結跑一次 `pnpm add`，把 repo 抓進 profile。不需
 | 完全沒有進度條 | 找不到 DSH 視窗 | 跑 `probe.mjs --detect`；必要時用 `--pid <electron-main-pid>` 或 `--title <regex>` 指定 |
 | 進度條一閃就消失 | 外掛沒載入或已停用 | 重載 App；檢查 App 日誌有沒有 `taskbar-status` 的 warn |
 | 紅燈一直不消 | 你正在用瀏覽器看 GUI，視窗從未取得前景 | 開始下一輪，或重載外掛 |
-| 出錯後工作列沒有反應 | `explorer.exe` 重啟過，COM 物件失效 | 下一次狀態變更時會自動重建 |
+| 工作列沒有反應（`explorer.exe` 重啟、遠端桌面重連後） | 工作列被重建，舊按鈕的進度條消失，舊的 COM 物件也可能失效 | 下一次狀態變更會比對 `Shell_TrayWnd`，handle 換了就丟掉 COM 物件重畫 |
 | 縮到系統匣後看不到 | 視窗不可見，工作列按鈕也不在 | 還原視窗後下一次更新會重新套用 |
 
 ## 運作原理
 
 外掛訂閱 `@deepseek-ai/dsh-session` 發佈在事件匯流排上的 `session/event`，把事件換算成「有幾個 turn 在跑、有幾件事在等人」，再用 koffi 直接呼叫 Win32：
 
-- **找視窗**：host 是 Electron 主程序的子行程，所以用 `process.ppid` 反查那個 pid 的 top-level 可見、無 owner 的視窗；視窗重建時自動重找。
+- **找視窗**：host 是 Electron 主程序的子行程，所以用 `process.ppid` 反查那個 pid 的 top-level 可見、無 owner 的視窗。每次畫之前驗一次擁有者 pid，不只 `IsWindow`——HWND 被回收給別的行程時 `IsWindow` 仍為真，那樣會把燈畫到別的視窗上。
+- **工作列重建**：每次 `render()` 讀一次 `Shell_TrayWnd` 的 handle。handle 變了代表整條工作列被重建（`explorer.exe` 重啟、遠端桌面切換顯示組態），舊按鈕的進度條與舊的 `ITaskbarList3` 都不能再用，於是清快取、釋放 COM 物件、重畫。
 - **不通知 main**：不使用 `process.send`。Electron main 的 IPC 是白名單制，收到不認得的訊息會直接終止 host。
 - **COM 沒有 interop**：用 vtable 指標呼叫 `ITaskbarList3`（`HrInit` / `SetProgressValue` / `SetProgressState`），必要時加 `FlashWindowEx`。
 
 ## 開發
 
 ```bash
-npm test                 # 32 個狀態機與渲染測試，不需要視窗、不需要 koffi
+npm test                 # 34 個狀態機與渲染測試，不需要視窗、不需要 koffi
 node scripts/probe.mjs   # 只驗 FFI：找到視窗，依序顯示灰 → 黃＋閃爍 → 紅 → 清除
 node scripts/demo.mjs    # 端到端：用假 ctx 驅動真正的外掛碼跑完整事件序列
 ```
@@ -114,5 +115,5 @@ CI 在 `windows-latest` 上跑 Node 22 與 24：先 `node --check` 四個入口�
 - 提問只追蹤**直接**的 `tool/call`。透過 code-mode 的 `tool/ptc-dispatch` 間接呼叫 `ask_user_question` 不會亮燈——那條路徑本身不阻塞，工具會立刻拿到 pending 結果。
 - 只有 `reason.kind === 'error'` 會變紅；`aborted`、`interrupted`、`blocked` 都算正常結束。
 - 執行中沒有顏色可選（見上文）。
-- 視窗縮到系統匣、`explorer.exe` 重啟等情況靠下一次更新自癒，可能有一個狀態週期的延遲。
+- 工作列重建（`explorer.exe` 重啟、遠端桌面連線切換顯示組態）靠**下一次狀態變更**自癒：外掛在那次 `render()` 比對 `Shell_TrayWnd` 的 handle，換了就清快取、丟掉舊 COM 物件並重畫。沒有常駐心跳，所以從重連到你下一次開新一輪之間，燈不會主動回來。
 - 沒有 `tool/ptc-dispatch`、多視窗與 tray 狀態的自動化測試；這些靠 `probe.mjs` 人工驗證。

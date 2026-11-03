@@ -317,7 +317,7 @@ test('selectFlash announces a blocking item exactly once', () => {
  * A `TaskbarList3` stand-in that records what the monitor asks the shell to do,
  * plus the minimum Win32 surface `render()` touches. This is the seam that lets
  * the rendering rules be tested without a window.
- * @param {{failOnState?: number}} [options]
+ * @param {{failOnState?: number, shell?: string, ownerPid?: number}} [options]
  */
 function attachFakeWin32(target, options = {}) {
 	const calls = [];
@@ -325,6 +325,8 @@ function attachFakeWin32(target, options = {}) {
 	const fake = {
 		calls,
 		flashes: 0,
+		/** Shell_TrayWnd handle the fake shell reports; mutate it to simulate a rebuild. */
+		shell: options.shell ?? 'tray-1',
 		setProgressValue(hwnd, completed, total) {
 			calls.push(['value', completed, total]);
 			return 0;
@@ -342,13 +344,28 @@ function attachFakeWin32(target, options = {}) {
 	target.hwnd = 'hwnd-1';
 	target.api = {
 		IsWindow: () => true,
+		FindWindowW: () => fake.shell,
+		GetWindowThreadProcessId: (hwnd, cell) => {
+			cell.value = options.ownerPid ?? 0;
+			return 0;
+		},
 		types: { FLASHWINFO: 32 },
 		FlashWindowEx: () => {
 			fake.flashes += 1;
 			return true;
 		},
 	};
-	target.koffi = { sizeof: () => 32 };
+	target.koffi = {
+		sizeof: () => 32,
+		alloc: () => ({ value: 0 }),
+		decode: (cell) => cell.value ?? 0,
+		encode: (cell, _type, value) => {
+			cell.value = value;
+		},
+		register: (callback) => callback,
+		unregister: () => {},
+		pointer: () => 'callback',
+	};
 	return fake;
 }
 
@@ -432,6 +449,56 @@ test('an unchanged state is not pushed to the shell twice', () => {
 	target.render();
 	target.render();
 	assert.equal(fake.calls.length, afterFirst);
+	target.shutdown();
+});
+
+test('a rebuilt taskbar is repainted even though the desired state did not change', () => {
+	const target = monitor();
+	const fake = attachFakeWin32(target);
+	feed(target, 'turn/start', { turn: 1 });
+	target.render();
+	assert.deepEqual(fake.calls, [['state', TBPF.INDETERMINATE]]);
+	assert.equal(target.shellTray, 'tray-1');
+
+	// Same desired state, same shell: the cache keeps the shell call out.
+	target.render();
+	assert.equal(fake.calls.length, 1);
+
+	// Explorer rebuilt the taskbar (its own restart, or the display change an RDP
+	// reconnect performs): every button lost its bar, so the cached state is
+	// worthless and the object created against the old shell must not be trusted.
+	fake.shell = 'tray-2';
+	target.render();
+	assert.deepEqual(fake.calls, [['state', TBPF.INDETERMINATE], ['dispose']]);
+	assert.equal(target.applied, null, 'the cache is invalidated');
+	assert.equal(target.taskbar, null, 'the old ITaskbarList3 is dropped');
+	assert.equal(target.shellTray, 'tray-2');
+
+	// The next render builds a new object against the new shell and repaints.
+	const fresh = attachFakeWin32(target, { shell: 'tray-2' });
+	target.render();
+	assert.deepEqual(fresh.calls, [['state', TBPF.INDETERMINATE]]);
+	target.shutdown();
+});
+
+test('a recycled HWND is rejected instead of painting on another process window', () => {
+	const target = monitor();
+	attachFakeWin32(target, { ownerPid: 4242 });
+	target.windowPid = 111;
+	assert.equal(target.windowBelongsTo('hwnd-1', 111), false);
+	assert.equal(target.hwnd, 'hwnd-1', 'the predicate itself has no side effects');
+
+	// render() must not paint on a window it no longer owns, and must drop the
+	// cached handle so a later render resolves the real one.
+	target.api.EnumWindows = () => {};
+	target.render();
+	assert.equal(target.hwnd, null, 'a handle owned by another process is not reused');
+	assert.equal(target.applied, null);
+
+	// Once the owner matches again the cached window is kept as-is.
+	attachFakeWin32(target, { ownerPid: 111 });
+	target.windowPid = 111;
+	assert.equal(target.windowBelongsTo('hwnd-1', 111), true);
 	target.shutdown();
 });
 
