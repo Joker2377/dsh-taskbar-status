@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import {
 	TaskbarMonitor,
 	observeSessionEvent,
@@ -13,7 +14,7 @@ import {
 	selectFlash,
 	selectState,
 } from '../lib/index.js';
-import { TBPF, bindWin32, listTopLevelWindows } from '../lib/win32-taskbar.js';
+import { TBPF, bindWin32, koffiCandidatePaths, listTopLevelWindows } from '../lib/win32-taskbar.js';
 
 const silent = { debug() {}, warn() {} };
 
@@ -583,4 +584,72 @@ test('hidden windows are reported as hidden', () => {
 		IsWindowVisible: () => false,
 	};
 	assert.equal(listTopLevelWindows(koffi, api)[0].visible, false);
+});
+
+// --- koffi resolution -------------------------------------------------------
+
+/** Built with `join`, so the assertions hold on any platform. */
+const RESOURCES = join('C:', 'Apps', 'DeepSeek Harness', 'resources');
+const EXECUTABLE = join('C:', 'Apps', 'DeepSeek Harness', 'DeepSeek Harness.exe');
+const KOFFI_TAIL = join('dsh', 'node_modules', 'koffi', 'index.js');
+const PACKED = join(RESOURCES, 'app.asar', KOFFI_TAIL);
+const UNPACKED = join(RESOURCES, 'app', KOFFI_TAIL);
+
+test('koffi resolution knows the packed 0.2.x runtime layout', () => {
+	const candidates = koffiCandidatePaths({ env: {}, execPath: EXECUTABLE, exists: (entry) => entry === PACKED });
+	assert.deepEqual(candidates, [{ source: 'runtime', label: 'app.asar:dsh', path: PACKED }]);
+});
+
+test('koffi resolution keeps the unpacked layout of older builds', () => {
+	const candidates = koffiCandidatePaths({ env: {}, execPath: EXECUTABLE, exists: (entry) => entry === UNPACKED });
+	assert.deepEqual(candidates.map((candidate) => candidate.path), [UNPACKED]);
+});
+
+test('the runtime root comes from the executable directory, not the executable path', () => {
+	const seen = [];
+	koffiCandidatePaths({
+		env: {},
+		execPath: EXECUTABLE,
+		exists: (entry) => {
+			seen.push(entry);
+			return false;
+		},
+	});
+	// Regression: `join(execPath, '..')` produced `<…>.exe/../resources`, which is
+	// not a directory and never matched.
+	assert.deepEqual(seen, [PACKED, UNPACKED]);
+});
+
+test('DSH_KOFFI_PATH wins over the shipped layouts and accepts a file or a directory', () => {
+	const directory = join('C:', 'tools', 'koffi');
+	const fromDirectory = koffiCandidatePaths({
+		env: { DSH_KOFFI_PATH: directory },
+		execPath: '',
+		exists: (entry) => entry === join(directory, 'index.js'),
+	});
+	assert.deepEqual(fromDirectory.map((candidate) => candidate.source), ['env']);
+	assert.deepEqual(fromDirectory.map((candidate) => candidate.path), [join(directory, 'index.js')]);
+
+	const file = join('C:', 'tools', 'koffi', 'index.cjs');
+	const fromFile = koffiCandidatePaths({ env: { DSH_KOFFI_PATH: file }, execPath: '', exists: (entry) => entry === file });
+	assert.deepEqual(fromFile.map((candidate) => candidate.path), [file]);
+
+	const ordered = koffiCandidatePaths({ env: { DSH_KOFFI_PATH: directory }, execPath: EXECUTABLE, exists: () => true });
+	assert.equal(ordered[0].source, 'env');
+	assert.deepEqual(ordered.slice(1).map((candidate) => candidate.source), ['runtime', 'runtime']);
+});
+
+test('a LOCALAPPDATA root equal to the executable root is tried once', () => {
+	const localAppData = join('C:', 'Users', 'someone', 'AppData', 'Local');
+	const executable = join(localAppData, 'Programs', 'DeepSeek Harness', 'DeepSeek Harness.exe');
+	const candidates = koffiCandidatePaths({
+		env: { LOCALAPPDATA: localAppData },
+		execPath: executable,
+		exists: (entry) => entry.endsWith(join('app.asar', KOFFI_TAIL)),
+	});
+	assert.equal(candidates.length, 1);
+});
+
+test('koffi resolution reports nothing when no copy is installed', () => {
+	assert.deepEqual(koffiCandidatePaths({ env: {}, execPath: '', exists: () => false }), []);
 });
