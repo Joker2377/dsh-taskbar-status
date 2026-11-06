@@ -100,7 +100,7 @@ DSH 會用你貼的連結跑一次 `pnpm add`，把 repo 抓進 profile。不需
 ## 開發
 
 ```bash
-npm test                 # 34 個狀態機與渲染測試，不需要視窗、不需要 koffi
+npm test                 # 36 個狀態機與渲染測試，不需要視窗、不需要 koffi
 node scripts/probe.mjs   # 只驗 FFI：找到視窗，依序顯示灰 → 黃＋閃爍 → 紅 → 清除
 node scripts/demo.mjs    # 端到端：用假 ctx 驅動真正的外掛碼跑完整事件序列
 ```

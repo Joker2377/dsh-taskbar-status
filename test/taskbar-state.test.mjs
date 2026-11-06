@@ -13,7 +13,7 @@ import {
 	selectFlash,
 	selectState,
 } from '../lib/index.js';
-import { TBPF } from '../lib/win32-taskbar.js';
+import { TBPF, bindWin32, listTopLevelWindows } from '../lib/win32-taskbar.js';
 
 const silent = { debug() {}, warn() {} };
 
@@ -542,4 +542,45 @@ test('shutdown stops further rendering', () => {
 	target.render();
 	assert.equal(target.disabled, true);
 	assert.equal(fake.calls.length, afterShutdown, 'a disposed monitor must not paint the bar');
+});
+
+test('a hot reload binds Win32 only once', () => {
+	const seen = new Set();
+	const define = (name) => {
+		if (seen.has(name)) throw new Error(`Duplicate type name '${name}'`);
+		seen.add(name);
+		return { size: 32 };
+	};
+	const koffi = {
+		load: () => ({ func: () => () => {} }),
+		pointer: () => ({}),
+		struct: define,
+		proto: (signature) => define(signature),
+	};
+	const key = Symbol.for('dsh-taskbar-status.win32-binding');
+	delete globalThis[key];
+	try {
+		assert.equal(bindWin32(koffi), bindWin32(koffi));
+	} finally {
+		delete globalThis[key];
+	}
+});
+
+test('hidden windows are reported as hidden', () => {
+	const koffi = {
+		alloc: () => ({}),
+		decode: () => 1,
+		pointer: () => ({}),
+		register: (callback) => callback,
+		unregister() {},
+	};
+	const api = {
+		EnumWindows: (callback) => callback(1n),
+		EnumWindowsProc: {},
+		GetWindowThreadProcessId() {},
+		GetWindow: () => null,
+		GetWindowTextW: () => 0,
+		IsWindowVisible: () => false,
+	};
+	assert.equal(listTopLevelWindows(koffi, api)[0].visible, false);
 });
