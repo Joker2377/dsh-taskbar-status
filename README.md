@@ -83,6 +83,7 @@ DSH 會用你貼的連結跑一次 `pnpm add`，把 repo 抓進 profile。不需
 | 症狀 | 可能原因 | 處理 |
 | --- | --- | --- |
 | 完全沒有進度條 | 找不到 DSH 視窗 | 跑 `probe.mjs --detect`；必要時用 `--pid <electron-main-pid>` 或 `--title <regex>` 指定 |
+| 完全沒有進度條，日誌有 `koffi is not available` | 外掛旁邊沒有 `koffi`，runtime 裡的副本也認錯位置（DSH 0.2.x 把 host 打包進 `app.asar`） | 0.6.2 起會依序試 `DSH_KOFFI_PATH`、host 自己的模組圖、`resources/app.asar/dsh/…`；仍失敗就設 `DSH_KOFFI_PATH` 指向 koffi 目錄 |
 | 進度條一閃就消失 | 外掛沒載入或已停用 | 重載 App；檢查 App 日誌有沒有 `taskbar-status` 的 warn |
 | 紅燈一直不消 | 你正在用瀏覽器看 GUI，視窗從未取得前景 | 開始下一輪，或重載外掛 |
 | 工作列沒有反應（`explorer.exe` 重啟、遠端桌面重連後） | 工作列被重建，舊按鈕的進度條消失，舊的 COM 物件也可能失效 | 下一次狀態變更會比對 `Shell_TrayWnd`，handle 換了就丟掉 COM 物件重畫 |
@@ -95,12 +96,13 @@ DSH 會用你貼的連結跑一次 `pnpm add`，把 repo 抓進 profile。不需
 - **找視窗**：host 是 Electron 主程序的子行程，所以用 `process.ppid` 反查那個 pid 的 top-level 可見、無 owner 的視窗。每次畫之前驗一次擁有者 pid，不只 `IsWindow`——HWND 被回收給別的行程時 `IsWindow` 仍為真，那樣會把燈畫到別的視窗上。
 - **工作列重建**：每次 `render()` 讀一次 `Shell_TrayWnd` 的 handle。handle 變了代表整條工作列被重建（`explorer.exe` 重啟、遠端桌面切換顯示組態），舊按鈕的進度條與舊的 `ITaskbarList3` 都不能再用，於是清快取、釋放 COM 物件、重畫。
 - **不通知 main**：不使用 `process.send`。Electron main 的 IPC 是白名單制，收到不認得的訊息會直接終止 host。
+- **koffi 從哪裡來**：先找外掛自己的 `node_modules`，再找 `DSH_KOFFI_PATH`、host 自己的模組圖，最後才試 `resources/app.asar/dsh/…` 與舊版未打包的 `resources/app/dsh/…`。DSH 0.2.x 把 runtime 收進 `app.asar`，原本只認未打包路徑的寫法會讓外掛靜靜停用，所以路徑不再寫死。
 - **COM 沒有 interop**：用 vtable 指標呼叫 `ITaskbarList3`（`HrInit` / `SetProgressValue` / `SetProgressState`），必要時加 `FlashWindowEx`。
 
 ## 開發
 
 ```bash
-npm test                 # 36 個狀態機與渲染測試，不需要視窗、不需要 koffi
+npm test                 # 42 個狀態機、渲染與解析測試，不需要視窗、不需要 koffi
 node scripts/probe.mjs   # 只驗 FFI：找到視窗，依序顯示灰 → 黃＋閃爍 → 紅 → 清除
 node scripts/demo.mjs    # 端到端：用假 ctx 驅動真正的外掛碼跑完整事件序列
 ```
