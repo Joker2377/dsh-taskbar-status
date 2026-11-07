@@ -8,7 +8,7 @@
 把 agent 的狀態放上工作列：DeepSeek Harness Desktop 的工作列圖示會變成灰色跑動條（執行中）、琥珀色滿條並閃爍（等你決定）、或全紅（上一輪失敗）。純 host 端外掛，不改 `main.js`，不改 `app.asar`。
 
 > [!NOTE]
-> 需要 Windows 10/11 與 DeepSeek Harness Desktop `>=0.1.1-rc.2 <0.3.0`。其他平台會直接停用，不會載入原生 FFI。
+> 需要 Windows 10/11 與 DeepSeek Harness Desktop `>=0.1.1-rc.2 <0.3.0-0`。其他平台會直接停用，不會載入原生 FFI。
 
 ## 功能
 
