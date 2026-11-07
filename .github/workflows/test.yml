@@ -33,3 +33,10 @@ jobs:
           node --check scripts/demo.mjs
       - name: State machine tests
         run: npm test
+      # Doctor from dsh-plugin-devkit 0.3.0, pinned to its full merge commit so a
+      # devkit change cannot alter this CI without a commit here. Bump it on purpose.
+      - name: Doctor
+        shell: bash
+        run: |
+          npm i --no-save --prefix "$RUNNER_TEMP/devkit" "https://codeload.github.com/Joker2377/dsh-plugin-devkit/tar.gz/5d9384c62ef086eac661e21ed7098785be304b6d"
+          node "$RUNNER_TEMP/devkit/node_modules/dsh-plugin-devkit/scripts/cli.mjs" doctor .
